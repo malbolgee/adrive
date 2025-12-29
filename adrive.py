@@ -49,8 +49,7 @@ def progress(prefix: str, done: int, total: int, start: float):
     pct = (done / total) if total else 0
     bar = "#" * int(pct * 30) + "-" * (30 - int(pct * 30))
     sys.stdout.write(
-        f"\r{prefix} [{bar}] {pct * 100:6.2f}% {human(done)}/{human(total)} "
-        f"speed={human(int(speed))}/s ETA={eta:6.1f}s"
+        f"\r{prefix} [{bar}] {pct * 100:6.2f}% {human(done)}/{human(total)} speed={human(int(speed))}/s ETA={eta:6.1f}s"
     )
     sys.stdout.flush()
 
