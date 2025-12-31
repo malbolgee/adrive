@@ -42,14 +42,28 @@ def human(n: int) -> Optional[str]:
         size /= 1024.0
 
 
-def progress(prefix: str, done: int, total: int, start: float):
+def human_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    d, r = divmod(seconds, 86400)
+    h, r = divmod(r, 3600)
+    m, s = divmod(r, 60)
+    if d > 0:
+        return f"{d}d {h}h {m}m {s}s"
+    if h > 0:
+        return f"{h}h {m}m {s}s"
+    if m > 0:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+def progress(prefix: str, done: int, total: int, start: float, base_done: int = 0):
     elapsed = max(time.time() - start, 1e-6)
-    speed = done / elapsed
+    speed = (done - base_done) / elapsed
     eta = (total - done) / speed if speed > 0 and total else 0
     pct = (done / total) if total else 0
     bar = "#" * int(pct * 30) + "-" * (30 - int(pct * 30))
     sys.stdout.write(
-        f"\r{prefix} [{bar}] {pct * 100:6.2f}% {human(done)}/{human(total)} speed={human(int(speed))}/s ETA={eta:6.1f}s"
+        f"\r{prefix} [{bar}] {pct * 100:6.2f}% {human(done)}/{human(total)} speed={human(int(speed))}/s elapsed={human_duration(elapsed)} ETA={human_duration(eta)}\033[K"
     )
     sys.stdout.flush()
 
@@ -253,18 +267,41 @@ def download(path: Optional[str], name: Optional[str], last: bool, _id: Optional
     url = f"{ROOT_BASE}/{REPO}/{p}/{name}" if p else f"{ROOT_BASE}/{REPO}/{name}"
     out = out or name
 
-    with requests.get(url, auth=(user, key), stream=True, timeout=300) as r:
-        r.raise_for_status()
+    resume_pos = 0
+    if os.path.exists(out):
+        resume_pos = os.path.getsize(out)
+
+    headers = {}
+    if resume_pos > 0:
+        headers["Range"] = f"bytes={resume_pos}-"
+
+    r = requests.get(url, auth=(user, key), headers=headers, stream=True, timeout=300)
+    if r.status_code == 416:
+        r.close()
+        resume_pos = 0
+        r = requests.get(url, auth=(user, key), stream=True, timeout=300)
+
+    r.raise_for_status()
+
+    mode = "wb"
+    if r.status_code == 206:
+        mode = "ab"
+        cr = r.headers.get("Content-Range", "")
+        total = int(cr.rsplit("/", 1)[1]) if "/" in cr else resume_pos + int(r.headers.get("Content-Length", "0"))
+    else:
+        resume_pos = 0
         total = int(r.headers.get("Content-Length", "0"))
-        got = 0
+
+    with r:
+        got = resume_pos
         start = time.time()
-        with open(out, "wb") as f:
+        with open(out, mode) as f:
             for chunk in r.iter_content(chunk_size=CHUNK):
                 if not chunk:
                     continue
                 f.write(chunk)
                 got += len(chunk)
-                progress("Downloading", got, total, start)
+                progress("Downloading", got, total, start, base_done=resume_pos)
     sys.stdout.write("\n")
     print(f"Saved to {out}")
 
