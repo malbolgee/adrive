@@ -2,3 +2,4 @@
 adrive
 cJSON.c
 cJSON.h
+*.o
