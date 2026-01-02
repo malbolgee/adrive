@@ -666,13 +666,38 @@ void cmd_upload(const char *dest_path, const char *local_file, const char *filen
         }
         else
         {
-            // Pretty print response
             cJSON *json = cJSON_Parse(chunk.memory);
             if (json)
             {
-                char *s = cJSON_Print(json);
-                printf("%s\n", s);
-                free(s);
+                cJSON *j_path = cJSON_GetObjectItem(json, "path");
+                char *filename_display = (j_path && j_path->valuestring) ? j_path->valuestring : "unknown";
+                if (filename_display)
+                {
+                    char *slash = strrchr(filename_display, '/');
+                    if (slash)
+                        filename_display = slash + 1;
+                }
+
+                double size_val = 0;
+                cJSON *j_size = cJSON_GetObjectItem(json, "size");
+                if (cJSON_IsNumber(j_size))
+                    size_val = j_size->valuedouble;
+                else if (cJSON_IsString(j_size))
+                    size_val = atof(j_size->valuestring);
+                char *h_size = human_size(size_val);
+
+                cJSON *j_mime = cJSON_GetObjectItem(json, "mimeType");
+                cJSON *j_checksums = cJSON_GetObjectItem(json, "checksums");
+                cJSON *j_sha1 = j_checksums ? cJSON_GetObjectItem(j_checksums, "sha1") : NULL;
+                cJSON *j_link = cJSON_GetObjectItem(json, "downloadUri");
+
+                printf("\nfile: %s\n", filename_display);
+                printf("size: %s\n", h_size);
+                printf("type: %s\n", (j_mime && j_mime->valuestring) ? j_mime->valuestring : "unknown");
+                printf("id: %s\n", (j_sha1 && j_sha1->valuestring) ? j_sha1->valuestring : "unknown");
+                printf("link: %s\n", (j_link && j_link->valuestring) ? j_link->valuestring : "unknown");
+
+                free(h_size);
                 cJSON_Delete(json);
             }
             else
