@@ -19,7 +19,7 @@ function create_directory() {
 }
 
 function create_symlink() {
-    ln -sf "$(pwd)/adrive.py" "$directory/adrive"
+    ln -sf "$(pwd)/adrive" "$directory/adrive"
 }
 
 function export_shortcut() {

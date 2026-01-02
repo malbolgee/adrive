@@ -1,24 +1,32 @@
 # adrive - A Simple Artifactory CLI
 
-A Python command-line interface for interacting with Artifactory. This tool simplifies uploading, listing,
+A C command-line interface for interacting with Artifactory. This tool simplifies uploading, listing,
 and downloading artifacts from the `scratch_US` repository.
 
 ## Prerequisites
 
-*   Python 3
+*   cJSON, libcurl and libcrypto
 
 ## Installation
+
+To install the necessary libraries
+
+```bash
+sudo apt update
+sudo apt install libcurl4-openssl-dev libcjson-dev libssl-dev
+```
+
+## Compilation
+
+```bash
+clang -o adrive adrive.c -Wall -Wextra -O3 -lcurl -lcjson -lcrypto
+```
 
 To install the tool and use it globally, run the `install.sh` script:
 
 ```bash
 ./install.sh
 ```
-
-This script performs the following actions:
-1.  Creates a directory at `/localrepo/$USER/.local/bin/` (if it doesn't exist).
-2.  Creates a symbolic link from `adrive.py` to that directory.
-3.  Updates your `~/.bashrc` to include the new directory in your `PATH`.
 
 After running the script, restart your terminal or source your `.bashrc`. You can then use the `adrive` command directly.
 
@@ -38,12 +46,6 @@ export ARTIFACTORY_API_KEY="your_api_key"
 
 ## Usage
 
-Run the script using Python (or `adrive` if installed):
-
-```bash
-python adrive.py <command> [options]
-```
-# OR
 ```bash
 adrive <command> [options]
 ```
@@ -56,7 +58,7 @@ Uploads a local file to the Artifactory repository. The tool automatically appen
 
 **Syntax:**
 ```bash
-python adrive.py upload [options] <file>
+adrive upload [options] <file>
 ```
 
 **Options:**
@@ -68,12 +70,12 @@ python adrive.py upload [options] <file>
 
 Upload to your user folder:
 ```bash
-python adrive.py upload my_app.apk
+adrive upload my_app.apk
 ```
 
 Upload to a specific folder:
 ```bash
-python adrive.py upload --dest-path "team/builds" my_app.apk
+adrive upload --dest-path "team/builds" my_app.apk
 ```
 
 #### 2. List
@@ -82,7 +84,7 @@ Lists files in a specific path within the repository.
 
 **Syntax:**
 ```bash
-python adrive.py list [options]
+adrive list [options]
 ```
 
 **Options:**
@@ -92,12 +94,12 @@ python adrive.py list [options]
 
 List files in your user folder:
 ```bash
-python adrive.py list
+adrive list
 ```
 
 List files in a specific folder:
 ```bash
-python adrive.py list --path "team/builds"
+adrive list --path "team/builds"
 ```
 
 #### 3. Download
@@ -106,7 +108,7 @@ Downloads an artifact from the repository. You can identify the file by name, SH
 
 **Syntax:**
 ```bash
-python adrive.py download [options]
+adrive download [options]
 ```
 
 **Options:**
@@ -114,26 +116,27 @@ python adrive.py download [options]
 *   `--name`: The exact filename to download.
 *   `--id`: The SHA1 hash of the file. This searches the entire repository, so `--path` is ignored.
 *   `--last`: Download the most recently modified file in the specified path.
+*   `--extract`: Extracts the downloaded file using some program from user choice.
 *   `--out`: The local output filename. Defaults to the artifact name.
 
 **Examples:**
 
 Download a specific file from your user folder:
 ```bash
-python adrive.py download --name "my_app__a1b2c3d4.apk"
+adrive download --name "my_app__a1b2c3d4.apk"
 ```
 
 Download the latest file from your user folder:
 ```bash
-python adrive.py download --last
+adrive download --last
 ```
 
 Download a file by its SHA1 hash (searches everywhere):
 ```bash
-python adrive.py download --id "a1b2c3d4e5f6..."
+adrive download --id "a1b2c3d4e5f6..."
 ```
 
 Download to a specific local file:
 ```bash
-python adrive.py download --last --out "latest_build.apk"
+adrive download --last --out "latest_build.apk"
 ```
