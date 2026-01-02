@@ -2,8 +2,10 @@
 
 import json
 import os
+import subprocess
 import sys
 import time
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Optional
 
@@ -148,22 +150,20 @@ def upload(dest_path: Optional[str], local_file: str, filename_override: Optiona
         )
         sys.stdout.write("\n")
         resp.raise_for_status()
-    except requests.HTTPError as e:
+    except requests.HTTPError:
         sys.stdout.write("\n")
-        msg = str(e)
         try:
             msg = json.dumps(resp.json(), indent=2)
-        except Exception:
+        except JSONDecodeError:
             msg = resp.text
         print(f"HTTP error: {msg}", file=sys.stderr)
         sys.exit(1)
     finally:
         pf.close()
 
-    # Show the server's JSON response (path, checksums, downloadUri, etc.)
     try:
         print(json.dumps(resp.json(), indent=2))
-    except Exception:
+    except JSONDecodeError:
         print(resp.text)
 
 
@@ -221,11 +221,111 @@ def _find_by_sha1_anywhere(sha1: str) -> Optional[tuple]:
             if parts:
                 filename = parts[-1]
                 path_without_repo = "/".join(parts[:-1])  # may be empty
-                return (path_without_repo, filename)
+                return path_without_repo, filename
     return None
 
 
-def download(path: Optional[str], name: Optional[str], last: bool, _id: Optional[str], out: Optional[str]):
+def get_config_path():
+    home = os.getenv("HOME", ".")
+    return os.path.join(home, ".adrive", "data_config.json")
+
+
+def load_config():
+    path = get_config_path()
+    if not os.path.exists(path):
+        return {"configs": []}
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {"configs": []}
+
+
+def save_config(config):
+    path = get_config_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(config, f, indent=2)
+
+
+def get_mime_type_from_file(filename):
+    try:
+        out = subprocess.check_output(["file", "--mime-type", "-b", filename], text=True)
+        return out.strip()
+    except Exception:
+        return None
+
+
+def perform_extraction(filename, content_type, content_encoding):
+    eff_type = content_type
+    if eff_type:
+        eff_type = eff_type.split(";")[0].strip()
+
+    if not eff_type or eff_type == "application/octet-stream":
+        eff_type = get_mime_type_from_file(filename)
+
+    if not eff_type:
+        print("Could not determine file type for extraction.")
+        return
+
+    print(f"Extraction: Type='{eff_type}', Encoding='{content_encoding or '(null)'}'")
+
+    config = load_config()
+    configs = config.get("configs", [])
+
+    match = None
+    for c in configs:
+        if c.get("ext") != eff_type:
+            continue
+        c_enc = c.get("encoding")
+        if content_encoding is None:
+            if c_enc is None:
+                match = c
+                break
+        else:
+            if c_enc and c_enc.lower() == content_encoding.lower():
+                match = c
+                break
+
+    if match:
+        prog = match.get("prog")
+        attrs = match.get("attrs")
+    else:
+        print("No extraction config found for this file type.")
+        try:
+            prog = input("Enter program to use: ").strip()
+        except EOFError:
+            prog = ""
+
+        if not prog:
+            print("Skipping extraction.")
+            return
+
+        try:
+            attrs = input("Enter flags or leave empty: ").strip()
+        except EOFError:
+            attrs = ""
+
+        if not attrs:
+            attrs = None
+
+        new_entry = {"ext": eff_type, "encoding": content_encoding, "prog": prog, "attrs": attrs}
+        configs.append(new_entry)
+        config["configs"] = configs
+        save_config(config)
+
+    if prog:
+        cmd = f"{prog} {attrs if attrs else ''} \"{filename}\""
+        print(f"Executing: {cmd}")
+        ret = subprocess.call(cmd, shell=True)
+        if ret != 0:
+            print(f"Extraction failed with code {ret}")
+        else:
+            print("Extraction successful.")
+
+
+def download(path: Optional[str], name: Optional[str], last: bool, _id: Optional[str], out: Optional[str],
+             extract: bool = False):
     """Retrieve Artifact (GET /{repo}/{path}/{filename}) with progress."""
     user, key = load_basic_auth()
     if not (user and key):
@@ -292,18 +392,25 @@ def download(path: Optional[str], name: Optional[str], last: bool, _id: Optional
         resume_pos = 0
         total = int(r.headers.get("Content-Length", "0"))
 
+    content_type = r.headers.get("Content-Type")
+    content_encoding = r.headers.get("Content-Encoding")
+
     with r:
         got = resume_pos
         start = time.time()
         with open(out, mode) as f:
-            for chunk in r.iter_content(chunk_size=CHUNK):
+            while True:
+                chunk = r.raw.read(CHUNK, decode_content=False)
                 if not chunk:
-                    continue
+                    break
                 f.write(chunk)
                 got += len(chunk)
                 progress("Downloading", got, total, start, base_done=resume_pos)
     sys.stdout.write("\n")
     print(f"Saved to {out}")
+
+    if extract:
+        perform_extraction(out, content_type, content_encoding)
 
 
 def main(argv=None):
@@ -333,7 +440,8 @@ def main(argv=None):
     dl.add_argument("--last", action="store_true",
                     help="Download most recent file (uses ARTIFACTORY_USER path when --path omitted)")
     dl.add_argument("--out", help="Output path")
-    dl.set_defaults(func=lambda a: download(a.path, a.name, a.last, a.id, a.out))
+    dl.add_argument("--extract", action="store_true", help="Extract downloaded file")
+    dl.set_defaults(func=lambda a: download(a.path, a.name, a.last, a.id, a.out, a.extract))
 
     args = p.parse_args(argv)
     try:
