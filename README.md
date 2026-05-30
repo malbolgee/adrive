@@ -18,9 +18,33 @@ sudo apt install libcurl4-openssl-dev libcjson-dev libssl-dev
 
 ## Compilation
 
+To compile the project, simply run `make` in the root directory:
+
 ```bash
-clang -o adrive adrive.c -Wall -Wextra -O3 -lcurl -lcjson -lcrypto
+make
 ```
+
+### Local cJSON Support
+
+If you do not have `libcjson-dev` installed system-wide or prefer to use a local copy, you can compile with the `USE_LOCAL_CJSON` option enabled:
+
+```bash
+make USE_LOCAL_CJSON=1
+```
+
+*Note: Ensure `cJSON.c` and `cJSON.h` are present in the project directory when using this option.*
+
+### Cross-Compilation
+
+To cross-compile using `clang` for an x86_64 Linux target (e.g., an Ubuntu 22.04 LTS x86_64 host), you can specify the target triple by overriding the `CC` variable. 
+
+For example, to compile for a Linux x86_64 target using clang:
+
+```bash
+make CC="clang --target=x86_64-linux-gnu"
+```
+
+*(Make sure your environment has the necessary libraries, such as `libcurl`, `libssl`, and `libcjson`, available for the target architecture).*
 
 To install the tool and use it globally, run the `install.sh` script:
 
