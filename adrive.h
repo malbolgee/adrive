@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <curl/curl.h>
 #include <openssl/evp.h>
+#include <pthread.h>
 #ifdef USE_LOCAL_CJSON
 #include "cJSON.h"
 #else
@@ -22,6 +23,7 @@
 #define ROOT_BASE "https://artifacts.mot.com:443/artifactory"
 #define REPO "scratch_US"
 #define CHUNK_SIZE (8 * 1024 * 1024)
+#define THREAD_COUNT 4
 
 extern char *g_user;
 extern char *g_key;

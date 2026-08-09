@@ -1,6 +1,6 @@
 CC ?= clang
 CFLAGS += -Wall -Wextra -O3
-LIBS = -lcurl -lcrypto
+LIBS = -lcurl -lcrypto -lpthread
 
 TARGET = adrive
 SRCS = adrive.c helpers.c cmd_upload.c cmd_list.c cmd_download.c
