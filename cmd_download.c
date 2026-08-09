@@ -40,19 +40,8 @@ void cmd_download(const char *path, const char *name_arg, int last, const char *
             char *list_url;
             asprintf(&list_url, "%s/api/storage/%s/%s?list&deep=1&listFolders=0", ROOT_BASE, REPO, p);
 
-            struct MemoryStruct chunk = {malloc(1), 0};
-            CURL *curl = curl_easy_init();
-            curl_easy_setopt(curl, CURLOPT_URL, list_url);
-            curl_easy_setopt(curl, CURLOPT_USERNAME, g_user);
-            curl_easy_setopt(curl, CURLOPT_PASSWORD, g_key);
-            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &chunk);
-            curl_easy_perform(curl);
-            curl_easy_cleanup(curl);
+            cJSON *json = api_get_json(list_url);
             free(list_url);
-
-            cJSON *json = cJSON_Parse(chunk.memory);
-            free(chunk.memory);
             if (!json)
                 die("Failed to list files for --last");
 

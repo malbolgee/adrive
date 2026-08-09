@@ -10,30 +10,9 @@ void cmd_list(const char *path)
     char *url;
     asprintf(&url, "%s/api/storage/%s/%s?list&deep=1&listFolders=0", ROOT_BASE, REPO, p);
 
-    g_curl = curl_easy_init();
-    struct MemoryStruct chunk;
-    chunk.memory = malloc(1);
-    chunk.size = 0;
-
-    curl_easy_setopt(g_curl, CURLOPT_URL, url);
-    curl_easy_setopt(g_curl, CURLOPT_USERNAME, g_user);
-    curl_easy_setopt(g_curl, CURLOPT_PASSWORD, g_key);
-    curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 60L);
-    curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-    curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, (void *)&chunk);
-
-    CURLcode res = curl_easy_perform(g_curl);
-    long response_code;
-    curl_easy_getinfo(g_curl, CURLINFO_RESPONSE_CODE, &response_code);
-
-    if (res != CURLE_OK || response_code >= 400)
-    {
-        die("HTTP error: %ld\n%s", response_code, chunk.memory);
-    }
-
-    cJSON *json = cJSON_Parse(chunk.memory);
+    cJSON *json = api_get_json(url);
     if (!json)
-        die("Failed to parse JSON");
+        die("Failed to list files or fetch JSON response from Artifactory.");
 
     cJSON *files = cJSON_GetObjectItem(json, "files");
     if (!files || cJSON_GetArraySize(files) == 0)
@@ -72,8 +51,6 @@ void cmd_list(const char *path)
     }
 
     cJSON_Delete(json);
-    free(chunk.memory);
     free(url);
     free(p);
-    curl_easy_cleanup(g_curl);
 }

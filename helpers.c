@@ -18,33 +18,15 @@ void load_basic_auth()
 
 char *default_user_path_or_die(const char *path_hint)
 {
-    if (path_hint && *path_hint)
-    {
-        while (*path_hint == '/')
-            ++path_hint;
-        char *p = strdup(path_hint);
-        size_t len = strlen(p);
-        while (len > 0 && p[len - 1] == '/')
-        {
-            p[len - 1] = '\0';
-            len--;
-        }
-        return p;
-    }
-    load_basic_auth();
-    if (!g_user)
-    {
+    const char *src = (path_hint && *path_hint) ? path_hint : (load_basic_auth(), g_user);
+    if (!src || !*src)
         die("ARTIFACTORY_USER is required when --path is omitted.");
-    }
-    char *p = strdup(g_user);
-    while (*p == '/')
-        ++p;
+    while (*src == '/')
+        src++;
+    char *p = strdup(src);
     size_t len = strlen(p);
     while (len > 0 && p[len - 1] == '/')
-    {
-        p[len - 1] = '\0';
-        --len;
-    }
+        p[--len] = '\0';
     return p;
 }
 
@@ -253,26 +235,28 @@ static char *get_mime_type_from_file(const char *filename)
     return NULL;
 }
 
-static void get_config_path(char *buf, size_t size)
+static int ends_with(const char *str, const char *suffix)
 {
-    const char *home = getenv("HOME");
-    if (!home)
-        home = ".";
-    snprintf(buf, size, "%s/.adrive/data_config.json", home);
+    size_t len = strlen(str);
+    size_t slen = strlen(suffix);
+    return (len >= slen && strcmp(str + len - slen, suffix) == 0);
 }
 
-static void ensure_config_dir()
-{
-    const char *home = getenv("HOME");
-    if (!home)
-        return;
-    char path[1024];
-    snprintf(path, sizeof(path), "%s/.adrive", home);
-    if (mkdir(path, 0755) != 0 && errno != EEXIST)
-    {
-        fprintf(stderr, "Warning: Could not create config directory %s\n", path);
-    }
-}
+typedef struct {
+    const char *mime;
+    const char *ext;
+    const char *prog;
+    const char *attrs;
+} ExtractMap;
+
+static const ExtractMap kExtractMaps[] = {
+    {"application/zip", ".zip", "unzip", ""},
+    {"application/x-tar", ".tar", "tar", "xf"},
+    {"application/x-gzip", ".tar.gz", "tar", "xzf"},
+    {"application/gzip", ".gz", "gunzip", ""},
+    {"application/x-bzip2", ".bz2", "bunzip2", ""},
+    {"application/x-xz", ".xz", "unxz", ""},
+};
 
 void perform_extraction(const char *filename, const char *ctype, const char *cenc)
 {
@@ -294,145 +278,56 @@ void perform_extraction(const char *filename, const char *ctype, const char *cen
         eff_type = get_mime_type_from_file(filename);
     }
 
-    if (!eff_type)
+    const char *prog = NULL;
+    const char *attrs = NULL;
+
+    if (eff_type)
     {
-        printf("Could not determine file type for extraction.\n");
+        for (size_t i = 0; i < sizeof(kExtractMaps)/sizeof(kExtractMaps[0]); i++)
+        {
+            if (strcasecmp(eff_type, kExtractMaps[i].mime) == 0)
+            prog = kExtractMaps[i].prog;
+            {
+                attrs = kExtractMaps[i].attrs;
+                break;
+            }
+        }
+    }
+
+    if (!prog)
+    {
+        for (size_t i = 0; i < sizeof(kExtractMaps)/sizeof(kExtractMaps[0]); i++)
+        {
+            if (ends_with(filename, kExtractMaps[i].ext))
+            {
+                prog = kExtractMaps[i].prog;
+                attrs = kExtractMaps[i].attrs;
+                break;
+            }
+        }
+    }
+
+    if (!prog)
+    {
+        printf("No standard extraction config found for file: %s (Type='%s')\n", filename, eff_type ? eff_type : "(unknown)");
+        if (eff_type)
+            free(eff_type);
         return;
     }
 
-    printf("Extraction: Type='%s', Encoding='%s'\n", eff_type, cenc ? cenc : "(null)");
+    printf("Extraction: Type='%s', Encoding='%s' using '%s'\n", eff_type ? eff_type : "(unknown)", cenc ? cenc : "(null)", prog);
 
-    char config_path[1024];
-    get_config_path(config_path, sizeof(config_path));
-
-    cJSON *root = NULL;
-    FILE *f = fopen(config_path, "rb");
-    if (f)
-    {
-        fseek(f, 0, SEEK_END);
-        long len = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        char *data = malloc(len + 1);
-        if (data)
-        {
-            fread(data, 1, len, f);
-            data[len] = 0;
-            root = cJSON_Parse(data);
-            free(data);
-        }
-        fclose(f);
-    }
-
-    if (!root)
-    {
-        root = cJSON_CreateObject();
-        cJSON_AddItemToObject(root, "configs", cJSON_CreateArray());
-    }
-
-    cJSON *configs = cJSON_GetObjectItem(root, "configs");
-    if (!configs)
-    {
-        configs = cJSON_CreateArray();
-        cJSON_AddItemToObject(root, "configs", configs);
-    }
-
-    cJSON *match = NULL;
-    cJSON *item = NULL;
-    cJSON_ArrayForEach(item, configs)
-    {
-        cJSON *j_ext = cJSON_GetObjectItem(item, "ext");
-        cJSON *j_enc = cJSON_GetObjectItem(item, "encoding");
-
-        int ext_match = (cJSON_IsString(j_ext) && strcmp(j_ext->valuestring, eff_type) == 0);
-        int enc_match = 0;
-        if (cenc == NULL)
-            enc_match = cJSON_IsNull(j_enc);
-        else
-            enc_match = (cJSON_IsString(j_enc) && strcmp(j_enc->valuestring, cenc) == 0);
-
-        if (ext_match && enc_match)
-        {
-            match = item;
-            break;
-        }
-    }
-
-    char *prog = NULL;
-    char *attrs = NULL;
-
-    if (match)
-    {
-        prog = strdup(cJSON_GetObjectItem(match, "prog")->valuestring);
-        cJSON *j_attrs = cJSON_GetObjectItem(match, "attrs");
-        if (cJSON_IsString(j_attrs))
-            attrs = strdup(j_attrs->valuestring);
-    }
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd), "%s %s \"%s\"", prog, attrs ? attrs : "", filename);
+    printf("Executing: %s\n", cmd);
+    int ret = system(cmd);
+    if (ret != 0)
+        printf("Extraction failed with code %d\n", ret);
     else
-    {
-        printf("No extraction config found for this file type.\n");
-        printf("Enter program to use (e.g. tar): ");
-        char buf[256];
-        if (fgets(buf, sizeof(buf), stdin))
-        {
-            char *p = strchr(buf, '\n');
-            if (p)
-                *p = 0;
-            prog = strdup(buf);
-        }
-        printf("Enter flags (e.g. xzvf) or leave empty: ");
-        if (fgets(buf, sizeof(buf), stdin))
-        {
-            char *p = strchr(buf, '\n');
-            if (p)
-                *p = 0;
-            if (strlen(buf) > 0)
-                attrs = strdup(buf);
-        }
+        printf("Extraction successful.\n");
 
-        cJSON *new_entry = cJSON_CreateObject();
-        cJSON_AddStringToObject(new_entry, "ext", eff_type);
-        if (cenc)
-            cJSON_AddStringToObject(new_entry, "encoding", cenc);
-        else
-            cJSON_AddNullToObject(new_entry, "encoding");
-        cJSON_AddStringToObject(new_entry, "prog", prog);
-        if (attrs)
-            cJSON_AddStringToObject(new_entry, "attrs", attrs);
-        else
-            cJSON_AddNullToObject(new_entry, "attrs");
-
-        cJSON_AddItemToArray(configs, new_entry);
-
-        ensure_config_dir();
-        f = fopen(config_path, "wb");
-        if (f)
-        {
-            char *out = cJSON_Print(root);
-            fprintf(f, "%s", out);
-            free(out);
-            fclose(f);
-        }
-    }
-
-    if (prog)
-    {
-        char cmd[2048];
-        snprintf(cmd, sizeof(cmd), "%s %s %s", prog, attrs ? attrs : "", filename);
-        printf("Executing: %s\n", cmd);
-        int ret = system(cmd);
-        if (ret != 0)
-            printf("Extraction failed with code %d\n", ret);
-        else
-            printf("Extraction successful.\n");
-    }
-
-    if (prog)
-        free(prog);
-    if (attrs)
-        free(attrs);
     if (eff_type)
         free(eff_type);
-    cJSON_Delete(root);
 }
 
 size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp)
@@ -456,29 +351,32 @@ int compare_files(const void *a, const void *b)
     return strcmp(fb->lastModified, fa->lastModified);
 }
 
-char *find_by_sha1(const char *sha1)
+cJSON *api_get_json(const char *url)
 {
-    char *url;
-    asprintf(&url, "%s/api/search/checksum?sha1=%s&repos=%s", ROOT_BASE, sha1, REPO);
-
     struct MemoryStruct chunk;
     chunk.memory = malloc(1);
     chunk.size = 0;
 
     CURL *curl = curl_easy_init();
+    if (!curl)
+    {
+        free(chunk.memory);
+        return NULL;
+    }
+
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_USERNAME, g_user);
     curl_easy_setopt(curl, CURLOPT_PASSWORD, g_key);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
     CURLcode res = curl_easy_perform(curl);
-    long code;
+    long code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
     curl_easy_cleanup(curl);
-    free(url);
 
-    if (res != CURLE_OK || code != 200)
+    if (res != CURLE_OK || code >= 400 || code == 0)
     {
         free(chunk.memory);
         return NULL;
@@ -486,6 +384,16 @@ char *find_by_sha1(const char *sha1)
 
     cJSON *json = cJSON_Parse(chunk.memory);
     free(chunk.memory);
+    return json;
+}
+
+char *find_by_sha1(const char *sha1)
+{
+    char *url;
+    asprintf(&url, "%s/api/search/checksum?sha1=%s&repos=%s", ROOT_BASE, sha1, REPO);
+
+    cJSON *json = api_get_json(url);
+    free(url);
     if (!json)
         return NULL;
 

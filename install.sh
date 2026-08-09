@@ -6,30 +6,17 @@ else
     directory="$HOME/.local/bin/"
 fi
 
-function install() {
-    create_directory
-    create_symlink
-    export_shortcut
-}
+# Ensure install directory exists
+mkdir -p "$directory"
 
-function create_directory() {
-    if [ ! -d "$directory" ]; then
-        mkdir -p "$directory"
-    fi
-}
+# Create symlink to adrive binary
+ln -sf "$(pwd)/adrive" "$directory/adrive"
 
-function create_symlink() {
-    ln -sf "$(pwd)/adrive" "$directory/adrive"
-}
-
-function export_shortcut() {
-    local export_line="export PATH=\"\$PATH:$directory\""
-    if ! grep -Fxq "$export_line" "$HOME/.bashrc"; then
-        echo "$export_line" >> "$HOME/.bashrc"
-        echo "line $export_line successfully added to bashrc"
-    else
-        echo "line $export_line already exists in bashrc"
-    fi
-}
-
-install
+# Export install directory in PATH via bashrc if not already present
+export_line="export PATH=\"\$PATH:$directory\""
+if ! grep -Fxq "$export_line" "$HOME/.bashrc"; then
+    echo "$export_line" >> "$HOME/.bashrc"
+    echo "line $export_line successfully added to bashrc"
+else
+    echo "line $export_line already exists in bashrc"
+fi

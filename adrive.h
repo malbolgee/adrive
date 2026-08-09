@@ -237,6 +237,14 @@ void perform_extraction(const char *filename, const char *ctype, const char *cen
 /* API helpers */
 
 /**
+ * Performs a curl GET request to Artifactory and parses the response as JSON.
+ *
+ * @param url The target URL.
+ * @return A cJSON object pointer, or NULL on error.
+ */
+cJSON *api_get_json(const char *url);
+
+/**
  * Searches for an artifact by its SHA1 hash.
  *
  * @param sha1 SHA1 hash to search for.
