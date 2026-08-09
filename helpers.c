@@ -242,6 +242,20 @@ static int ends_with(const char *str, const char *suffix)
     return (len >= slen && strcmp(str + len - slen, suffix) == 0);
 }
 
+static char *normalize_filename(const char *filename)
+{
+    char *dup = strdup(filename);
+    char *p = strrchr(dup, '.');
+    if (p)
+    {
+        if (p - dup >= 10 && *(p - 10) == '_' && *(p - 9) == '_')
+        {
+            memmove(p - 10, p, strlen(p) + 1);
+        }
+    }
+    return dup;
+}
+
 typedef struct {
     const char *mime;
     const char *ext;
@@ -281,24 +295,25 @@ void perform_extraction(const char *filename, const char *ctype, const char *cen
     const char *prog = NULL;
     const char *attrs = NULL;
 
-    if (eff_type)
+    // 1. Try normalized filename extension matching first
+    char *norm = normalize_filename(filename);
+    for (size_t i = 0; i < sizeof(kExtractMaps)/sizeof(kExtractMaps[0]); i++)
+    {
+        if (ends_with(norm, kExtractMaps[i].ext))
+        {
+            prog = kExtractMaps[i].prog;
+            attrs = kExtractMaps[i].attrs;
+            break;
+        }
+    }
+    free(norm);
+
+    // 2. Fall back to MIME type matching
+    if (!prog && eff_type)
     {
         for (size_t i = 0; i < sizeof(kExtractMaps)/sizeof(kExtractMaps[0]); i++)
         {
             if (strcasecmp(eff_type, kExtractMaps[i].mime) == 0)
-            prog = kExtractMaps[i].prog;
-            {
-                attrs = kExtractMaps[i].attrs;
-                break;
-            }
-        }
-    }
-
-    if (!prog)
-    {
-        for (size_t i = 0; i < sizeof(kExtractMaps)/sizeof(kExtractMaps[0]); i++)
-        {
-            if (ends_with(filename, kExtractMaps[i].ext))
             {
                 prog = kExtractMaps[i].prog;
                 attrs = kExtractMaps[i].attrs;
