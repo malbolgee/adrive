@@ -225,35 +225,22 @@ def _find_by_sha1_anywhere(sha1: str) -> Optional[tuple]:
     return None
 
 
-def get_config_path():
-    home = os.getenv("HOME", ".")
-    return os.path.join(home, ".adrive", "data_config.json")
+def normalize_filename(filename: str) -> str:
+    """Strip trailing __[a-f0-9]{8} hash suffix before matching extension."""
+    import re
+    clean = re.sub(r"__[a-f0-9]{8}\.", ".", filename)
+    clean = re.sub(r"__[a-f0-9]{8}$", "", clean)
+    return clean
 
 
-def load_config():
-    path = get_config_path()
-    if not os.path.exists(path):
-        return {"configs": []}
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except Exception:
-        return {"configs": []}
-
-
-def save_config(config):
-    path = get_config_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(config, f, indent=2)
-
-
-def get_mime_type_from_file(filename):
-    try:
-        out = subprocess.check_output(["file", "--mime-type", "-b", filename], text=True)
-        return out.strip()
-    except Exception:
-        return None
+EXTRACT_MAPS = [
+    {"mime": "application/zip", "ext": ".zip", "prog": "unzip", "attrs": ""},
+    {"mime": "application/x-tar", "ext": ".tar", "prog": "tar", "attrs": "xf"},
+    {"mime": "application/x-gzip", "ext": ".tar.gz", "prog": "tar", "attrs": "xzf"},
+    {"mime": "application/gzip", "ext": ".gz", "prog": "gunzip", "attrs": ""},
+    {"mime": "application/x-bzip2", "ext": ".bz2", "prog": "bunzip2", "attrs": ""},
+    {"mime": "application/x-xz", "ext": ".xz", "prog": "unxz", "attrs": ""},
+]
 
 
 def perform_extraction(filename, content_type, content_encoding):
@@ -264,64 +251,37 @@ def perform_extraction(filename, content_type, content_encoding):
     if not eff_type or eff_type == "application/octet-stream":
         eff_type = get_mime_type_from_file(filename)
 
-    if not eff_type:
-        print("Could not determine file type for extraction.")
+    prog = None
+    attrs = None
+
+    # 1. Try normalized filename extension matching first
+    norm = normalize_filename(filename)
+    for entry in EXTRACT_MAPS:
+        if norm.lower().endswith(entry["ext"]):
+            prog = entry["prog"]
+            attrs = entry["attrs"]
+            break
+
+    # 2. Fall back to MIME type matching
+    if not prog and eff_type:
+        for entry in EXTRACT_MAPS:
+            if eff_type.lower() == entry["mime"]:
+                prog = entry["prog"]
+                attrs = entry["attrs"]
+                break
+
+    if not prog:
+        print(f"No standard extraction config found for file: {filename} (Type='{eff_type or '(unknown)'}')")
         return
 
-    print(f"Extraction: Type='{eff_type}', Encoding='{content_encoding or '(null)'}'")
-
-    config = load_config()
-    configs = config.get("configs", [])
-
-    match = None
-    for c in configs:
-        if c.get("ext") != eff_type:
-            continue
-        c_enc = c.get("encoding")
-        if content_encoding is None:
-            if c_enc is None:
-                match = c
-                break
-        else:
-            if c_enc and c_enc.lower() == content_encoding.lower():
-                match = c
-                break
-
-    if match:
-        prog = match.get("prog")
-        attrs = match.get("attrs")
+    print(f"Extraction: Type='{eff_type or '(unknown)'}', Encoding='{content_encoding or '(null)'}' using '{prog}'")
+    cmd = f"{prog} {attrs if attrs else ''} \"{filename}\""
+    print(f"Executing: {cmd}")
+    ret = subprocess.call(cmd, shell=True)
+    if ret != 0:
+        print(f"Extraction failed with code {ret}")
     else:
-        print("No extraction config found for this file type.")
-        try:
-            prog = input("Enter program to use: ").strip()
-        except EOFError:
-            prog = ""
-
-        if not prog:
-            print("Skipping extraction.")
-            return
-
-        try:
-            attrs = input("Enter flags or leave empty: ").strip()
-        except EOFError:
-            attrs = ""
-
-        if not attrs:
-            attrs = None
-
-        new_entry = {"ext": eff_type, "encoding": content_encoding, "prog": prog, "attrs": attrs}
-        configs.append(new_entry)
-        config["configs"] = configs
-        save_config(config)
-
-    if prog:
-        cmd = f"{prog} {attrs if attrs else ''} \"{filename}\""
-        print(f"Executing: {cmd}")
-        ret = subprocess.call(cmd, shell=True)
-        if ret != 0:
-            print(f"Extraction failed with code {ret}")
-        else:
-            print("Extraction successful.")
+        print("Extraction successful.")
 
 
 def download(path: Optional[str], name: Optional[str], last: bool, _id: Optional[str], out: Optional[str],
@@ -371,6 +331,87 @@ def download(path: Optional[str], name: Optional[str], last: bool, _id: Optional
     if os.path.exists(out):
         resume_pos = os.path.getsize(out)
 
+    # 1. Fetch file size and metadata using a HEAD request
+    r_head = requests.head(url, auth=(user, key), allow_redirects=True, timeout=60)
+    total_size = int(r_head.headers.get("Content-Length", 0))
+    content_type = r_head.headers.get("Content-Type")
+    content_encoding = r_head.headers.get("Content-Encoding")
+
+    # 2. Parallel download if file >= 10 MB and there is no active resume
+    if total_size >= 10 * 1024 * 1024 and resume_pos == 0:
+        THREAD_COUNT = 4
+        print(f"Starting parallel download with {THREAD_COUNT} threads...")
+
+        # Pre-allocate sparse file dynamically
+        with open(out, "wb") as f_alloc:
+            f_alloc.truncate(total_size)
+
+        chunk_size = total_size // THREAD_COUNT
+        ranges = []
+        for i in range(THREAD_COUNT):
+            start_pos = i * chunk_size
+            end_pos = (total_size - 1) if i == THREAD_COUNT - 1 else (i + 1) * chunk_size - 1
+            ranges.append((start_pos, end_pos))
+
+        thread_progress = [0] * THREAD_COUNT
+        worker_success = [True] * THREAD_COUNT
+
+        def download_segment(tid, s_pos, e_pos):
+            try:
+                headers = {"Range": f"bytes={s_pos}-{e_pos}"}
+                r_seg = requests.get(url, auth=(user, key), headers=headers, stream=True, timeout=300)
+                r_seg.raise_for_status()
+                with open(out, "r+b") as f:
+                    f.seek(s_pos)
+                    got = 0
+                    # read chunk-by-chunk and seek-write concurrently
+                    for block in r_seg.iter_content(chunk_size=1024*1024):
+                        if block:
+                            f.write(block)
+                            got += len(block)
+                            thread_progress[tid] = got
+            except Exception as ex:
+                print(f"\nThread {tid} failed: {ex}", file=sys.stderr)
+                worker_success[tid] = False
+
+        import threading
+        threads_running = True
+
+        def progress_printer():
+            start_time = time.time()
+            while threads_running:
+                total_dl = sum(thread_progress)
+                progress("Downloading (Parallel)", total_dl, total_size, start_time)
+                time.sleep(0.2)
+            total_dl = sum(thread_progress)
+            progress("Downloading (Parallel)", total_dl, total_size, start_time)
+
+        printer_thread = threading.Thread(target=progress_printer)
+        printer_thread.start()
+
+        workers = []
+        for i, (s_pos, e_pos) in enumerate(ranges):
+            w = threading.Thread(target=download_segment, args=(i, s_pos, e_pos))
+            workers.append(w)
+            w.start()
+
+        for w in workers:
+            w.join()
+
+        threads_running = False
+        printer_thread.join()
+        sys.stdout.write("\n")
+
+        if not all(worker_success):
+            print("One or more download threads failed.", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"Saved to {out}")
+        if extract:
+            perform_extraction(out, content_type, content_encoding)
+        return
+
+    # Fallback: Single-threaded stream download (resumes or small files)
     headers = {}
     if resume_pos > 0:
         headers["Range"] = f"bytes={resume_pos}-"
